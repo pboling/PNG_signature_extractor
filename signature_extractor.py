@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
 Signature Extractor Script
-This script processes all image files in the "Input" directory, extracts the signature
-(or object) from a white background, and saves the result as a PNG with a transparent background
-in the "Output" directory.
+This script processes all image files in the "Input" directory, extracts dark
+signature strokes from light paper, and saves the result as a PNG with a
+transparent background in the "Output" directory.
 
 Assumptions:
-  - The signature is dark (black/blue) on a white background.
-  - The threshold value (240) may be adjusted if necessary.
+  - The signature is dark (black/blue) on a light background.
+  - The input has no ruled paper or complex background behind the signature.
 """
 
 import cv2
 import numpy as np
 import os
-import logging 
+import logging
 
 # Set up logging with a standard format
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,19 +22,28 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 INPUT_FOLDER = "Input"
 OUTPUT_FOLDER = "Output"
 
+# Tuning parameters for shaded-paper extraction.
+BACKGROUND_BLUR_SIGMA = 23
+DARKNESS_OFFSET = 5.0
+DARKNESS_GAIN = 7.5
+NOISE_ALPHA_THRESHOLD = 18
+MIN_COMPONENT_AREA = 100
+SOFTEN_KERNEL_SIZE = (3, 3)
+
+
 def process_image(filename):
     """
     Processes a single image:
       - Reads the image.
       - Converts it to grayscale.
-      - Applies a binary inverse threshold to isolate the dark signature.
-      - Performs morphological operations to remove noise.
-      - Creates an alpha channel based on the mask.
+      - Estimates uneven background lighting.
+      - Builds a soft alpha mask from local ink darkness.
+      - Removes small connected components caused by paper texture.
       - Saves the final image with transparency.
     """
     input_path = os.path.join(INPUT_FOLDER, filename)
     output_path = os.path.join(OUTPUT_FOLDER, os.path.splitext(filename)[0] + "_extracted.png")
-    
+
     # Read the image in color
     image = cv2.imread(input_path)
     if image is None:
@@ -43,27 +52,40 @@ def process_image(filename):
 
     # Convert the image to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Apply a binary inverse threshold
-    # All pixels with a value greater than 240 (nearly white) become 0 (background),
-    # while darker pixels (the signature) become 255.
-    _, mask = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
-    
-    # Perform morphological operations to reduce noise and fill small gaps
-    kernel = np.ones((3,3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    
-    # Split the original image into its color channels
-    b, g, r = cv2.split(image)
-    # Use the mask as the alpha channel: signature pixels are opaque (255) and background is transparent (0)
-    alpha = mask
+
+    # Estimate uneven paper/background lighting and isolate strokes by local darkness.
+    background = cv2.GaussianBlur(
+        gray,
+        (0, 0),
+        sigmaX=BACKGROUND_BLUR_SIGMA,
+        sigmaY=BACKGROUND_BLUR_SIGMA,
+    )
+    darkness = cv2.subtract(background, gray)
+    alpha_mask = (
+        (darkness.astype(np.float32) - DARKNESS_OFFSET) * DARKNESS_GAIN
+    ).clip(0, 255).astype(np.uint8)
+    alpha_mask = cv2.GaussianBlur(alpha_mask, SOFTEN_KERNEL_SIZE, 0)
+
+    # Remove small paper-grain artifacts while preserving detached signature marks.
+    binary_mask = (alpha_mask > NOISE_ALPHA_THRESHOLD).astype(np.uint8)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary_mask, 8)
+    areas = stats[:, cv2.CC_STAT_AREA]
+    clean_mask = (areas[labels] >= MIN_COMPONENT_AREA).astype(np.uint8)
+    clean_mask[labels == 0] = 0
+    alpha_mask = (alpha_mask * clean_mask).astype(np.uint8)
+    alpha_mask = cv2.GaussianBlur(alpha_mask, SOFTEN_KERNEL_SIZE, 0)
+
+    # Render the extracted signature as neutral black ink on transparency.
+    b, g, r = cv2.split(np.zeros_like(image))
+    # Use soft alpha values so stroke edges stay antialiased instead of jagged.
+    alpha = alpha_mask
     # Merge the color channels with the alpha channel to create a BGRA image
     result = cv2.merge([b, g, r, alpha])
-    
+
     # Save the resulting image as a PNG file (supports transparency)
     cv2.imwrite(output_path, result)
     logging.info(f"Saved extracted image to: {output_path}")
+
 
 def main():
     """
@@ -79,12 +101,13 @@ def main():
     files = os.listdir(INPUT_FOLDER)
     image_files = [f for f in files if f.lower().endswith((".png", ".jpg", ".jpeg"))]
     logging.info(f"Found {len(image_files)} image file(s) in the input folder.")
-    
+
     for file in image_files:
         logging.info(f"Processing image: {file}")
         process_image(file)
-    
+
     logging.info("All images have been processed successfully.")
+
 
 if __name__ == "__main__":
     main()
