@@ -17,9 +17,13 @@ files to `Output/`. Output filenames append `_extracted` to the original base na
 ## Features
 
 - Processes `.png`, `.jpg`, and `.jpeg` files from `Input/`.
+- Accepts grayscale, BGR, and BGRA inputs; RGBA images are flattened onto a
+  white background before extraction.
 - Removes light paper backgrounds and mild paper texture.
 - Preserves the signature as black ink with a soft alpha channel, so stroke
   edges may be semi-transparent instead of jagged.
+- Optional `PRESERVE_ORIGINAL_COLOR` flag to keep the original ink color (e.g.
+  blue) instead of rendering black.
 - Saves results as RGBA PNG files in `Output/`.
 
 ## Project Layout
@@ -77,6 +81,18 @@ Example:
 Input/my-signature.png
 Output/my-signature_extracted.png
 ```
+
+## Configuration
+
+Tuning constants are defined at the top of `signature_extractor.py`:
+
+- `BACKGROUND_BLUR_SIGMA`, `DARKNESS_OFFSET`, `DARKNESS_GAIN`: control how
+  aggressively local ink darkness is amplified.
+- `NOISE_ALPHA_THRESHOLD`, `MIN_COMPONENT_AREA`: control which small artifacts
+  are discarded as paper grain.
+- `SOFTEN_KERNEL_SIZE`: smoothing applied to the alpha mask.
+- `PRESERVE_ORIGINAL_COLOR`: set to `True` to keep the source ink color
+  instead of rendering black.
 
 ## Input Tips
 

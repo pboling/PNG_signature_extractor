@@ -8,6 +8,9 @@ transparent background in the "Output" directory.
 Assumptions:
   - The signature is dark (black/blue) on a light background.
   - The input has no ruled paper or complex background behind the signature.
+
+Inputs may be 1-channel grayscale, 3-channel BGR, or 4-channel BGRA. RGBA
+inputs are flattened onto a white background before processing.
 """
 
 import cv2
@@ -30,6 +33,10 @@ NOISE_ALPHA_THRESHOLD = 18
 MIN_COMPONENT_AREA = 100
 SOFTEN_KERNEL_SIZE = (3, 3)
 
+# When True, keep the source pixel colors so blue ink stays blue.
+# When False (default), render the signature as neutral black ink.
+PRESERVE_ORIGINAL_COLOR = False
+
 
 def process_image(filename):
     """
@@ -44,11 +51,20 @@ def process_image(filename):
     input_path = os.path.join(INPUT_FOLDER, filename)
     output_path = os.path.join(OUTPUT_FOLDER, os.path.splitext(filename)[0] + "_extracted.png")
 
-    # Read the image in color
-    image = cv2.imread(input_path)
+    # Read the image, preserving alpha if present. RGBA inputs (e.g. signatures
+    # already on transparent backgrounds) would otherwise read as all-black BGR
+    # and collapse the local-darkness pipeline.
+    image = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if image is None:
         logging.error(f"Failed to read image: {input_path}")
         return
+
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.ndim == 3 and image.shape[2] == 4:
+        bgr = image[:, :, :3].astype(np.float32)
+        alpha_in = image[:, :, 3:4].astype(np.float32) / 255.0
+        image = (bgr * alpha_in + 255.0 * (1.0 - alpha_in)).astype(np.uint8)
 
     # Convert the image to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -75,8 +91,13 @@ def process_image(filename):
     alpha_mask = (alpha_mask * clean_mask).astype(np.uint8)
     alpha_mask = cv2.GaussianBlur(alpha_mask, SOFTEN_KERNEL_SIZE, 0)
 
-    # Render the extracted signature as neutral black ink on transparency.
-    b, g, r = cv2.split(np.zeros_like(image))
+    # Render the extracted signature. Default is neutral black ink on
+    # transparency; PRESERVE_ORIGINAL_COLOR keeps the source pixel colors so
+    # blue ink stays blue.
+    if PRESERVE_ORIGINAL_COLOR:
+        b, g, r = cv2.split(image)
+    else:
+        b, g, r = cv2.split(np.zeros_like(image))
     # Use soft alpha values so stroke edges stay antialiased instead of jagged.
     alpha = alpha_mask
     # Merge the color channels with the alpha channel to create a BGRA image
